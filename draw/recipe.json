@@ -1,0 +1,17 @@
+{
+  "name": "高岭土基础青瓷釉",
+  "temperature": "1280°C - 1300°C",
+  "ingredients": [
+    { "name": "钾长石", "percent": 40 },
+    { "name": "石英", "percent": 30 },
+    { "name": "方解石", "percent": 15 },
+    { "name": "高岭土", "percent": 10 },
+    { "name": "氧化铁", "percent": 5 }
+  ],
+  "umf": {
+    "R2O": "0.300",
+    "RO": "0.700",
+    "Al2O3": "0.450",
+    "SiO2": "3.800"
+  }
+}

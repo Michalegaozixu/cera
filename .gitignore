@@ -1,0 +1,24 @@
+# 环境变量与机密密钥
+.env
+**/.env
+.env.*
+
+# 运行时缓存与动态密钥
+.token_cache.json
+**/.token_cache.json
+
+# 依赖包 (未来如果用到)
+node_modules/
+**/node_modules/
+
+# 操作系统自动生成的垃圾文件
+.DS_Store
+**/.DS_Store
+Thumbs.db
+
+# 编译或打包生成的二进制文件
+cera-draw
+*.exe
+
+# 日志文件
+*.log
