@@ -52,3 +52,6 @@ This project is open-sourced under the **AGPL-3.0 License**.
 This is a strict copyleft license. If you deploy these scripts as a publicly accessible Web service (SaaS) or integrate them into proprietary software, you **must** open-source your entire application.
 
 **Commercial License available upon request.** Please contact me privately if your enterprise requires closed-source usage or an "All-Inclusive Premium Tier".
+
+## Acknowledgements
+- Formulation data utilized in the `Composition Search CLI` is derived and transformed from the open-source ceramic database [Glazy](https://glazy.org/) (by [Derek Philip Au](https://github.com/derekphilipau)). Special thanks to the Glazy community for their invaluable contributions to materials science.
