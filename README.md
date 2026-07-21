@@ -29,8 +29,7 @@ Each module is self-contained. Please refer to the specific `README.md` inside e
 | `chem/` | Lookup tool for precise chemical and physical properties (via PubChem). |
 | `EPOops/` | Direct gateway to the European Patent Office for cracking global patent barriers. |
 | `std/` | Global industrial manufacturing standard retriever. |
-| `Composition Search CLI/` | Standalone terminal search engine for historical kiln formulations and chemical
-  compositions, featuring anti-reverse encryption. |
+| `Composition Search CLI/` | Standalone terminal search engine for historical kiln formulations and chemicalcompositions, featuring anti-reverse encryption. |
 
 ## Quick Start
 
