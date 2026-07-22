@@ -22,3 +22,12 @@ cera-draw
 
 # 日志文件
 *.log
+
+Analysis.json
+Analysis.yaml
+Materials.json
+*.csv
+encrypt_data.ts
+encrypt_material.ts
+encrypted_data.ts
+encrypted_materials.ts
