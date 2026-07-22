@@ -39,7 +39,7 @@ bun chem.ts info "Alumina"
 
 Then push `Enter`, done.
 
-What's [**Bun**](https://bun.sh/) (A fast, all-in-one JavaScript runtime).
+What's [**Bun**](https://bun.sh/)? It's a fast, all-in-one JavaScript runtime.
 
 ## Tools Directory
 
