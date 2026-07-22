@@ -1,25 +1,35 @@
 # ceramicsay
 
-"This is a set of tools for those who love ceramics."
-
-## Overview
-
-Welcome to `ceramicsay`. This repository houses a collection of highly specialized, zero-dependency, CLI-driven scripts designed for the advanced ceramics industry and research community. 
-
-By integrating deep domain knowledge in materials science with modern AI-driven search, thermodynamic data retrieval, and global patent analysis, these tools act as your ultimate digital laboratory assistant.
+"Welcome to `cera`. This is a set of tools for those who love ceramics."
 
 ## Environment & Prerequisites
 
-This toolkit was developed and tested in a modern Linux (Ubuntu) environment. While both Node.js and Bun might be present in a typical development setup, **all scripts in this repository are designed to be executed exclusively using `bun`**.
+This toolkit was developed and tested in a modern Linux (Ubuntu) environment. **All scripts in this repository are designed to be executed exclusively using `bun`**.
 
-- **Runtime Required**: [Bun](https://bun.sh/) (A fast, all-in-one JavaScript runtime).
-- **Zero-Dependency Architecture**: There is no `package.json`, no `npm install`, and no `node_modules`. Every script relies entirely on Bun's native APIs and lightweight cloud CDNs. Simply clone and run.
+first thing first, install **Bun**:
 
-## Toolkit Directory
+open your Terminal,input the following command to check if **Bun** already existed:
+`'bun -v'`
 
-Each module is self-contained. Please refer to the specific `README.md` inside each folder for detailed, no-nonsense usage tutorials.
+if it doesn't exist,input the following command to install **Bun**:
+`curl -fsSL https://bun.sh/install | bash` for macos & linux
+`powershell -c "irm bun.sh/install.ps1 | iex"` for windows
 
-| Module | Purpose |
+after installation,check if it is installed correctly,input the following command to check:
+`'bun -v'`
+
+[Bun](https://bun.sh/) (A fast, all-in-one JavaScript runtime).
+
+second thing is that download the ts file, for example 'chem.ts', navigate to the directory where the file is located in your terminal, and input:
+`bun chem.ts info "Alumina"`
+
+then push 'enter' ,done.
+
+## Tools Directory
+
+Each tool is self-contained. Please refer to the specific `README.md` inside each folder for detailed usage tutorials.
+
+| Tool | Purpose |
 |--------|---------|
 | `draw/` | CLI-driven local web rendering for UMF formulation flowcharts (via Excalidraw). |
 | `search/exa/` | Semantic search agent tailored for academic papers and deep technical blogs. |
@@ -30,15 +40,6 @@ Each module is self-contained. Please refer to the specific `README.md` inside e
 | `EPOops/` | Direct gateway to the European Patent Office for cracking global patent barriers. |
 | `std/` | Global industrial manufacturing standard retriever. |
 | `Composition Search CLI/` | Standalone terminal search engine for historical kiln formulations and chemicalcompositions. |
-
-## Quick Start
-
-Navigate to any tool directory and execute the script directly using `bun`. You will need to configure your own API keys (BYOK) in your local `.env` file for modules that require external access.
-
-```bash
-cd search/exa
-bun exa.ts search "Recent breakthroughs in solid-state ceramic electrolytes"
-```
 
 ## Contributing & CLA (Contributor License Agreement)
 
