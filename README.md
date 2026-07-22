@@ -37,9 +37,9 @@ cd cera/chem
 bun chem.ts info "Alumina"
 ```
 
-Then push 'Enter', done.
+Then push `Enter`, done.
 
-[Bun](https://bun.sh/) (A fast, all-in-one JavaScript runtime).
+What's [**Bun**](https://bun.sh/) (A fast, all-in-one JavaScript runtime).
 
 ## Tools Directory
 
