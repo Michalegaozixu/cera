@@ -74,4 +74,4 @@ This is a strict copyleft license. If you deploy these scripts as a publicly acc
 **Commercial License available upon request.** Please contact me privately if your enterprise requires closed-source usage or an "All-Inclusive Premium Tier".
 
 ## Acknowledgements
-- Formulation data utilized in the `Composition Search CLI` is derived and transformed from the open-source ceramic database [Glazy](https://glazy.org/) (by [Derek Philip Au](https://github.com/derekphilipau)). Special thanks to the Glazy community for their invaluable contributions to materials science.
+- Formulation data utilized in the `Composition Search CLI` is derived and transformed from the open-source ceramic database [Glazy](https://glazy.org/) (by [Derek Philip Au](https://github.com/derekphilipau/glazy-data)). Special thanks to the Glazy community for their invaluable contributions to materials science.
