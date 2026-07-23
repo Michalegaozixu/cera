@@ -39,6 +39,8 @@ bun chem.ts info "Alumina"
 
 Then push `Enter`, done.
 
+![Successfully Run](https://github.com/user-attachments/assets/cc67fc96-2a18-4d38-921a-3678a9d345c3)
+
 What's [**Bun**](https://bun.sh/)? It's a fast, all-in-one JavaScript runtime.
 
 ## Tools Directory
