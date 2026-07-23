@@ -31,3 +31,7 @@ encrypt_data.ts
 encrypt_material.ts
 encrypted_data.ts
 encrypted_materials.ts
+
+# 临时文件与草稿目录
+.scratch/
+**/.scratch/
