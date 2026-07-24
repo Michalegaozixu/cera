@@ -4,8 +4,9 @@ import { join } from "node:path";
 // Define paths
 const ENV_PATH = join(import.meta.dirname, ".env");
 
-// Load .env file from the script directory manually
-let politeEmail = "";
+// Load OPENALEX_API_KEY from .env file in the script directory
+// Free API key: https://openalex.org/settings/api
+let openAlexApiKey = "";
 if (existsSync(ENV_PATH)) {
   const envContent = readFileSync(ENV_PATH, "utf8");
   for (const line of envContent.split(/\r?\n/)) {
@@ -17,9 +18,7 @@ if (existsSync(ENV_PATH)) {
       const value = trimmed.slice(index + 1).trim();
       const valClean = value.replace(/^['"]|['"]$/g, "");
       process.env[key] = valClean;
-      if (key === "POLITE_EMAIL") {
-        politeEmail = valClean;
-      }
+      if (key === "OPENALEX_API_KEY") openAlexApiKey = valClean;
     }
   }
 }
@@ -63,7 +62,7 @@ const ALL_CERAMIC_ISSNS = Object.values(CORE_JOURNALS)
   .flatMap(j => j.issns)
   .join("|");
 
-// Color codes for premium terminal layout
+// Color codes for terminal layout
 const colors = {
   reset: "\x1b[0m",
   bold: "\x1b[1m",
@@ -81,16 +80,21 @@ const colors = {
 // Main process
 async function main() {
   const args = process.argv.slice(2);
-  if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
-    printUsage();
+  const command = args[0]?.toLowerCase();
+
+  if (!command || ["help", "-h", "--help"].includes(command)) {
+    printHelp();
     return;
   }
 
-  const command = args[0].toLowerCase();
-  
-  if (command !== "search" && command !== "info" && command !== "download") {
-    console.error(`${colors.red}Error: Unknown command "${command}"${colors.reset}\n`);
-    printUsage();
+  const validCommands = [
+    "search", "info", "download", "group", "stats", 
+    "topics", "topic", "inst", "institution", "institutions"
+  ];
+
+  if (!validCommands.includes(command)) {
+    console.error(`${colors.red}Error: Unknown command "${command}".${colors.reset}`);
+    printHelp();
     process.exit(1);
   }
 
@@ -107,60 +111,72 @@ async function main() {
       case "download":
         await handleDownload(parsed);
         break;
+      case "group":
+      case "stats":
+        await handleGroup(parsed);
+        break;
+      case "topics":
+      case "topic":
+        await handleTopics(parsed);
+        break;
+      case "inst":
+      case "institution":
+      case "institutions":
+        await handleInst(parsed);
+        break;
     }
   } catch (error: any) {
-    console.error(`${colors.red}Error executing command: ${error.message || error}${colors.reset}`);
+    console.error(`${colors.red}Error: ${error.message || error}${colors.reset}`);
   }
 }
 
-// Print usage manual
-function printUsage() {
-  console.log(`${colors.bold}${colors.cyan}================================================================================`);
-  console.log(`               Ceramic Intelligence System: 学术论文检索工具 (TS CLI)`);
-  console.log(`================================================================================${colors.reset}`);
-  console.log(`使用方法:`);
-  console.log(`  bun paper.ts <命令> [参数/选项]\n`);
-  console.log(`命令列表:`);
-  console.log(`  ${colors.bold}search${colors.reset}       多条件搜索论文文献列表`);
-  console.log(`  ${colors.bold}info${colors.reset}         查询指定 DOI 或 OpenAlex ID 的论文详细卡片与重构摘要`);
-  console.log(`  ${colors.bold}download${colors.reset}     直接下载 Open Access 的免费 PDF 原文到本地\n`);
-  
-  console.log(`命令详解与示例:\n`);
-  
-  console.log(`1. ${colors.cyan}search (搜索)${colors.reset}`);
-  console.log(`   选项:`);
-  console.log(`     -q, --query <关键词>        搜索词，如 "sintering alumina"`);
-  console.log(`     -j, --journal <期刊代号>    限定期刊 (代号见下方对照表)`);
-  console.log(`     --ceramics                  只在预设的陶瓷核心期刊列表中检索`);
-  console.log(`     -y, --year <年份范围>       出版年份或范围 (如 "2024" 或 "2020-2026")`);
-  console.log(`     --oa                        仅筛选开放获取 (Open Access) 的免费文献`);
-  console.log(`     -l, --limit <数量>          返回文献数上限 (默认 10)`);
-  console.log(`     -s, --sort <排序规则>       citations (默认, 按被引降序) 或 year (按年份降序)`);
-  console.log(`   示例:`);
-  console.log(`     bun paper.ts search -q "glaze thermal expansion" --ceramics`);
-  console.log(`     bun paper.ts search -q "solid state sintering" -j jacs -y 2022-2026\n`);
-  
-  console.log(`2. ${colors.cyan}info (精读)${colors.reset}`);
-  console.log(`   参数: <DOI> 或 <OpenAlex_ID> (OpenAlex ID 格式如 W4388123456)`);
-  console.log(`   选项:`);
-  console.log(`     --save [文件名]             将文献卡片及重构好的摘要保存为本地 Markdown 报告`);
-  console.log(`   示例:`);
-  console.log(`     bun paper.ts info 10.1111/jace.19034`);
-  console.log(`     bun paper.ts info W4316223405 --save result.md\n`);
-  
-  console.log(`3. ${colors.cyan}download (下载全文)${colors.reset}`);
-  console.log(`   参数: <DOI> 或 <OpenAlex_ID>`);
-  console.log(`   选项:`);
-  console.log(`     -o, --output <文件名>       指定下载的 PDF 保存的文件名`);
-  console.log(`   示例:`);
-  console.log(`     bun paper.ts download 10.1111/jace.19034`);
-  console.log(`     bun paper.ts download W4316223405 -o paper_fulltext.pdf\n`);
-  
-  console.log(`期刊代号对照表:`);
-  for (const [key, val] of Object.entries(CORE_JOURNALS)) {
-    console.log(`  ${colors.bold}${key.padEnd(8)}${colors.reset} : ${val.name}`);
-  }
-  console.log();
+// Print help documentation
+function printHelp() {
+  console.log(`
+${colors.bold}${colors.cyan}OpenAlex Academic Paper Search Tool (paper.ts)${colors.reset}
+${colors.gray}Tailored for Ceramic & Materials Science Research${colors.reset}
+
+${colors.bold}USAGE:${colors.reset}
+  bun paper.ts <command> [options]
+
+${colors.bold}COMMANDS:${colors.reset}
+  ${colors.bold}search${colors.reset}       Search literature database with filters (keyword, journal, year, cites, topic, etc.)
+  ${colors.bold}group${colors.reset}        Aggregation statistics & distribution trends (year, country, type, journal, topic, etc.)
+  ${colors.bold}topics${colors.reset}       Search OpenAlex Topic classification system by keyword
+  ${colors.bold}inst${colors.reset}         Search OpenAlex Institution database by keyword
+  ${colors.bold}info${colors.reset}         Get detailed card info for single or batch DOIs / OpenAlex IDs
+  ${colors.bold}download${colors.reset}     Download Open Access (OA) PDF full-text to local disk
+
+${colors.bold}SEARCH & GROUP OPTIONS:${colors.reset}
+  -q, --query <text>       Search query string
+  -j, --journal <key>      Filter by ceramic core journal key (jacs, jecs, ci, jac, jncs, solgel, acta)
+  --ceramics               Filter by all core ceramic journals
+  -y, --year <year|range>  Filter publication year (e.g. 2024 or 2020-2026)
+  --oa                     Filter Open Access works only
+  -t, --type <type>        Filter work type (article, review, book-chapter, preprint, etc.)
+  --lang <code\>            Filter language (e.g. en, zh, ja)
+  -c, --country <code\>     Filter author institution country code (e.g. CN, US, DE)
+  --inst <ID\>              Filter author institution OpenAlex ID (e.g. I105991555)
+  --topic <ID\>             Filter topic OpenAlex ID (e.g. T10132)
+  --cites <ID|DOI>         Search works citing a given paper (e.g. W2741809807 or 10.1111/jace.19034)
+  --doi <DOIs>             Filter single or pipe/comma separated DOIs
+  --cited-min <n>          Filter minimum citation count
+  -l, --limit <n>          Page limit (default 10, max 100)
+  -p, --page <n>           Page number (default 1)
+  -s, --sort <citations|year> Sort order (default citations)
+  --by <field>             [group only] Grouping field: year (default), type, oa, country, journal, topic, lang
+
+${colors.bold}EXAMPLES:${colors.reset}
+  bun paper.ts search -q "alumina sintering" --ceramics --lang en
+  bun paper.ts search --cites W2741809807 -s year
+  bun paper.ts search --topic T10132 -c CN -y 2022-2026
+  bun paper.ts group -q "sintering" --by year
+  bun paper.ts group -q "porcelain" --by country
+  bun paper.ts topics "sintering alumina"
+  bun paper.ts inst "Jingdezhen"
+  bun paper.ts info 10.1111/jace.19034 10.1016/j.jeurceramsoc.2021.01.001 --save batch_report.md
+  bun paper.ts download W4319030111 -o laser_ceramics.pdf
+`);
 }
 
 // Basic argument parser
@@ -263,17 +279,14 @@ function reconstructAbstract(invertedIndex: any): string {
 
 // Fetch generic OpenAlex REST API helper
 async function fetchOpenAlex(path: string, params: Record<string, string>) {
-  const urlParams = new URLSearchParams(params);
+  const finalParams: Record<string, string> = { ...params };
+  if (openAlexApiKey) {
+    finalParams["api_key"] = openAlexApiKey;
+  }
+  const urlParams = new URLSearchParams(finalParams);
   const url = `${BASE_URL}${path}?${urlParams.toString()}`;
   
-  const headers: Record<string, string> = {
-    "accept": "application/json"
-  };
-
-  // Add email for OpenAlex polite pool if configured
-  if (politeEmail) {
-    headers["User-Agent"] = `mailto:${politeEmail}`;
-  }
+  const headers: Record<string, string> = { "accept": "application/json" };
 
   try {
     const response = await fetch(url, { method: "GET", headers });
@@ -292,21 +305,18 @@ async function fetchSingleWork(idOrDoi: string) {
   const cleaned = idOrDoi.trim();
   
   if (cleaned.match(/^W\d+$/i)) {
-    // OpenAlex ID
     path = `/works/${cleaned.toUpperCase()}`;
   } else {
-    // DOI
     const doi = cleanDOI(cleaned);
     path = `/works/https://doi.org/${doi}`;
   }
 
-  const url = `${BASE_URL}${path}`;
-  const headers: Record<string, string> = {
-    "accept": "application/json"
-  };
-  if (politeEmail) {
-    headers["User-Agent"] = `mailto:${politeEmail}`;
-  }
+  const urlParams = new URLSearchParams();
+  if (openAlexApiKey) urlParams.set("api_key", openAlexApiKey);
+  const qs = urlParams.toString();
+  const url = `${BASE_URL}${path}${qs ? "?" + qs : ""}`;
+
+  const headers: Record<string, string> = { "accept": "application/json" };
 
   try {
     const response = await fetch(url, { method: "GET", headers });
@@ -322,48 +332,40 @@ async function fetchSingleWork(idOrDoi: string) {
   }
 }
 
-// -------------------------------------------------------------
-// 1. Command handler: search
-// -------------------------------------------------------------
-async function handleSearch(parsed: any) {
-  const query = getOpt(parsed, "query", "q");
+// Resolve any DOI or W-ID input into a valid OpenAlex Work ID (e.g. W2741809807)
+async function resolveToWorkId(input: string): Promise<string> {
+  const cleaned = input.trim();
+  if (cleaned.match(/^W\d+$/i)) {
+    return cleaned.toUpperCase();
+  }
+  const work = await fetchSingleWork(cleaned);
+  if (work && work.id) {
+    return work.id.replace("https://openalex.org/", "");
+  }
+  return cleanDOI(cleaned);
+}
+
+// Helper to construct filter strings for search and group commands
+async function buildCommonFilters(parsed: any): Promise<string[]> {
+  const filters: string[] = [];
+
+  // 1. Journal filter
   const journalKey = getOpt(parsed, "journal", "j");
   const ceramicsOnly = getOpt(parsed, "ceramics");
-  const year = getOpt(parsed, "year", "y");
-  const oaOnly = getOpt(parsed, "oa");
-  const limit = getOpt(parsed, "limit", "l") || "10";
-  const sortBy = getOpt(parsed, "sort", "s") || "citations";
-
-  if (!query) {
-    console.error(`${colors.red}Error: Missing query string. Please specify -q or --query.${colors.reset}`);
-    console.log(`Example: bun paper.ts search -q "alumina sintering" --ceramics`);
-    return;
-  }
-
-  const params: Record<string, string> = {
-    per_page: String(limit)
-  };
-
-  // Build filter list
-  const filters: string[] = [];
-  
-  // 1. Query search
-  params.search = String(query);
-
-  // 2. Journal filtering
   if (journalKey) {
     const jKey = String(journalKey).toLowerCase();
     const journalInfo = CORE_JOURNALS[jKey];
     if (journalInfo) {
       filters.push(`primary_location.source.issn:${journalInfo.issns.join("|")}`);
     } else {
-      console.warn(`${colors.yellow}Warning: Unknown journal key "${journalKey}". Search will be global.${colors.reset}`);
+      console.warn(`${colors.yellow}Warning: Unknown journal key "${journalKey}".${colors.reset}`);
     }
   } else if (ceramicsOnly) {
     filters.push(`primary_location.source.issn:${ALL_CERAMIC_ISSNS}`);
   }
 
-  // 3. Year range filtering
+  // 2. Year range filter
+  const year = getOpt(parsed, "year", "y");
   if (year) {
     const yearStr = String(year);
     if (yearStr.includes("-")) {
@@ -374,16 +376,112 @@ async function handleSearch(parsed: any) {
     }
   }
 
-  // 4. Open Access filtering
+  // 3. Open Access filter
+  const oaOnly = getOpt(parsed, "oa");
   if (oaOnly) {
     filters.push("is_oa:true");
+  }
+
+  // 4. Document type filter
+  const typeFilter = getOpt(parsed, "type", "t");
+  if (typeFilter) {
+    filters.push(`type:${String(typeFilter).toLowerCase()}`);
+  }
+
+  // 5. Language filter
+  const langFilter = getOpt(parsed, "lang", "language");
+  if (langFilter) {
+    filters.push(`language:${String(langFilter).toLowerCase()}`);
+  }
+
+  // 6. Country filter
+  const countryFilter = getOpt(parsed, "country", "c");
+  if (countryFilter) {
+    filters.push(`authorships.institutions.country_code:${String(countryFilter).toUpperCase()}`);
+  }
+
+  // 7. Institution filter
+  const instFilter = getOpt(parsed, "inst");
+  if (instFilter) {
+    let instId = String(instFilter).trim();
+    if (!instId.toUpperCase().startsWith("I")) {
+      instId = `I${instId}`;
+    }
+    filters.push(`authorships.institutions.id:${instId.toUpperCase()}`);
+  }
+
+  // 8. Topic filter
+  const topicFilter = getOpt(parsed, "topic");
+  if (topicFilter) {
+    let topicId = String(topicFilter).trim();
+    if (!topicId.toUpperCase().startsWith("T")) {
+      topicId = `T${topicId}`;
+    }
+    filters.push(`topics.id:${topicId.toUpperCase()}`);
+  }
+
+  // 9. Cites filter (citations tracing)
+  const citesFilter = getOpt(parsed, "cites");
+  if (citesFilter) {
+    const targetWId = await resolveToWorkId(String(citesFilter));
+    filters.push(`cites:${targetWId}`);
+  }
+
+  // 10. Batch DOI filter
+  const doiFilter = getOpt(parsed, "doi");
+  if (doiFilter) {
+    const rawDois = String(doiFilter).split(/[|,]/).map(d => cleanDOI(d)).filter(Boolean);
+    if (rawDois.length > 0) {
+      const formattedDois = rawDois.map(d => `https://doi.org/${d}`).join("|");
+      filters.push(`doi:${formattedDois}`);
+    }
+  }
+
+  // 11. Minimum citation count filter
+  const citedMin = getOpt(parsed, "cited-min");
+  if (citedMin) {
+    const n = parseInt(String(citedMin));
+    if (!isNaN(n) && n >= 0) {
+      filters.push(`cited_by_count:>${n - 1}`);
+    }
+  }
+
+  return filters;
+}
+
+// -------------------------------------------------------------
+// 1. Command handler: search
+// -------------------------------------------------------------
+async function handleSearch(parsed: any) {
+  const query = getOpt(parsed, "query", "q");
+  const limitRaw = parseInt(String(getOpt(parsed, "limit", "l") || "10"));
+  const limit = Math.min(isNaN(limitRaw) ? 10 : limitRaw, 100);
+  const pageRaw = parseInt(String(getOpt(parsed, "page", "p") || "1"));
+  const page = isNaN(pageRaw) || pageRaw < 1 ? 1 : pageRaw;
+  const sortBy = getOpt(parsed, "sort", "s") || "citations";
+
+  const filters = await buildCommonFilters(parsed);
+
+  if (!query && filters.length === 0) {
+    console.error(`${colors.red}Error: Missing search criteria. Specify query (-q) or at least one filter (--cites, --topic, --inst, --country, --doi, -j, --ceramics).${colors.reset}`);
+    console.log(`Example: bun paper.ts search -q "alumina sintering" --ceramics`);
+    console.log(`Example: bun paper.ts search --cites W2741809807 --lang en`);
+    return;
+  }
+
+  const params: Record<string, string> = {
+    per_page: String(limit),
+    page: String(page)
+  };
+
+  if (query) {
+    params.search = String(query);
   }
 
   if (filters.length > 0) {
     params.filter = filters.join(",");
   }
 
-  // 5. Sorting
   if (sortBy === "year") {
     params.sort = "publication_year:desc,cited_by_count:desc";
   } else {
@@ -391,8 +489,8 @@ async function handleSearch(parsed: any) {
   }
 
   console.log(`${colors.gray}Searching OpenAlex database...${colors.reset}`);
-  if (politeEmail) {
-    console.log(`${colors.gray}Polite pool enabled: User-Agent set with ${politeEmail}${colors.reset}`);
+  if (openAlexApiKey) {
+    console.log(`${colors.gray}API Key enabled${colors.reset}`);
   }
 
   const result = await fetchOpenAlex("/works", params);
@@ -403,56 +501,297 @@ async function handleSearch(parsed: any) {
     return;
   }
 
+  const ceramicsOnly = getOpt(parsed, "ceramics");
   const targetTitle = ceramicsOnly 
     ? "LITERATURE SEARCH (Core Ceramic Journals)" 
     : "LITERATURE SEARCH (Global Catalog)";
-  printTitle(`${targetTitle} - ${works.length} results`);
+  const totalCount = result?.meta?.count ?? works.length;
+  printTitle(`${targetTitle} - Page ${page} / Total ~${totalCount.toLocaleString()}, Page items ${works.length}`);
 
-  const headers = ["ID / DOI", "Title", "Year", "Journal", "Cites", "OA"];
+  const headers = ["ID / DOI", "Title", "Year", "Journal", "Cites", "Type", "OA"];
   const rows = works.map((w: any) => {
-    // Determine ID display preference (DOI if available, otherwise OpenAlex ID)
     const doiClean = w.doi ? cleanDOI(w.doi) : "";
     const idDisplay = doiClean 
       ? colors.yellow + doiClean + colors.reset 
       : colors.yellow + w.id.replace("https://openalex.org/", "") + colors.reset;
 
-    const title = colors.bold + (w.title?.length > 55 ? w.title.substring(0, 52) + "..." : w.title) + colors.reset;
+    const title = colors.bold + (w.title?.length > 50 ? w.title.substring(0, 47) + "..." : (w.title || "Untitled")) + colors.reset;
     const year = String(w.publication_year || "N/A");
     
-    // Get Source Journal Name
     const sourceName = w.primary_location?.source?.display_name || "N/A";
-    const jName = sourceName.length > 25 ? sourceName.substring(0, 22) + "..." : sourceName;
+    const jName = sourceName.length > 22 ? sourceName.substring(0, 19) + "..." : sourceName;
     
     const cites = String(w.cited_by_count ?? 0);
-    const oa = w.is_oa ? `${colors.green}Yes (PDF)${colors.reset}` : `${colors.gray}No${colors.reset}`;
+    const workType = (w.type || "N/A").toLowerCase();
+    const oa = w.is_oa ? `${colors.green}OA${colors.reset}` : `${colors.gray}No${colors.reset}`;
 
-    return [idDisplay, title, year, jName, cites, oa];
+    return [idDisplay, title, year, jName, cites, workType, oa];
   });
 
   printTable(headers, rows);
+
+  if (totalCount > page * limit) {
+    console.log(`${colors.gray}提示: 使用 -p ${page + 1} 查看下一页${colors.reset}\n`);
+  }
 }
 
 // -------------------------------------------------------------
-// 2. Command handler: info
+// 2. Command handler: group (aggregation statistics)
+// -------------------------------------------------------------
+async function handleGroup(parsed: any) {
+  const query = getOpt(parsed, "query", "q");
+  const rawBy = String(getOpt(parsed, "by") || "publication_year").toLowerCase();
+  
+  const fieldMap: Record<string, string> = {
+    year: "publication_year",
+    publication_year: "publication_year",
+    type: "type",
+    oa: "open_access.oa_status",
+    oa_status: "open_access.oa_status",
+    country: "authorships.institutions.country_code",
+    journal: "primary_location.source.issn",
+    issn: "primary_location.source.issn",
+    topic: "topics.id",
+    lang: "language",
+    language: "language",
+    inst: "authorships.institutions.id"
+  };
+
+  const groupByField = fieldMap[rawBy] || rawBy;
+  const filters = await buildCommonFilters(parsed);
+
+  if (!query && filters.length === 0) {
+    console.error(`${colors.red}Error: Please specify query (-q) or at least one filter for aggregation analysis.${colors.reset}`);
+    console.log(`Example: bun paper.ts group -q "sintering alumina" --by publication_year`);
+    console.log(`Example: bun paper.ts group -q "zirconia" --by country`);
+    return;
+  }
+
+  const params: Record<string, string> = {
+    group_by: groupByField
+  };
+
+  if (query) params.search = String(query);
+  if (filters.length > 0) params.filter = filters.join(",");
+
+  console.log(`${colors.gray}Computing OpenAlex aggregated statistics for group_by=${groupByField}...${colors.reset}`);
+  
+  const result = await fetchOpenAlex("/works", params);
+  const groups: Array<{ key: string; key_display_name?: string; count: number }> = result?.group_by || [];
+
+  if (groups.length === 0) {
+    console.log(`${colors.yellow}No statistical records found for group_by=${groupByField}.${colors.reset}`);
+    return;
+  }
+
+  const totalCount = groups.reduce((acc, g) => acc + g.count, 0);
+
+  printTitle(`GROUP-BY AGGREGATION ANALYSIS: ${groupByField} (Total indexed: ${totalCount.toLocaleString()})`);
+
+  const maxCount = Math.max(...groups.map(g => g.count));
+  const headers = ["Category / Key", "Count", "Share", "Distribution Visual"];
+
+  const displayGroups = groups.slice(0, 20);
+
+  const rows = displayGroups.map(g => {
+    let keyName = g.key_display_name || g.key || "Unknown";
+    keyName = keyName.replace(/^https:\/\/openalex\.org\/(countries|topics)\//, "");
+    if (keyName.length > 35) keyName = keyName.substring(0, 32) + "...";
+    
+    const countStr = g.count.toLocaleString();
+    const percent = totalCount > 0 ? (g.count / totalCount) * 100 : 0;
+    const shareStr = `${percent.toFixed(1)}%`;
+    
+    const barRatio = maxCount > 0 ? g.count / maxCount : 0;
+    const barWidth = Math.round(barRatio * 25);
+    const visualBar = colors.cyan + "█".repeat(barWidth) + colors.reset;
+
+    return [keyName, countStr, shareStr, visualBar];
+  });
+
+  printTable(headers, rows);
+
+  if (groups.length > 20) {
+    console.log(`${colors.gray}Showing top 20 of ${groups.length} groups.${colors.reset}\n`);
+  }
+}
+
+// -------------------------------------------------------------
+// 3. Command handler: topics (active topic search)
+// -------------------------------------------------------------
+async function handleTopics(parsed: any) {
+  const query = getOpt(parsed, "query", "q") || parsed.positional[0];
+  const limitRaw = parseInt(String(getOpt(parsed, "limit", "l") || "10"));
+  const limit = Math.min(isNaN(limitRaw) ? 10 : limitRaw, 50);
+
+  if (!query) {
+    console.error(`${colors.red}Error: Missing topic search keyword.${colors.reset}`);
+    console.log(`Example: bun paper.ts topics "sintering"`);
+    return;
+  }
+
+  console.log(`${colors.gray}Searching OpenAlex topic system for: "${query}"...${colors.reset}`);
+
+  const params: Record<string, string> = {
+    search: String(query),
+    per_page: String(limit)
+  };
+
+  const result = await fetchOpenAlex("/topics", params);
+  const topics = result?.results || [];
+
+  if (topics.length === 0) {
+    console.log(`${colors.yellow}No topics matching "${query}" were found.${colors.reset}`);
+    return;
+  }
+
+  printTitle(`OPENALEX TOPIC CLASSIFICATION SYSTEM (Found ${result?.meta?.count || topics.length} topics)`);
+
+  const headers = ["Topic ID", "Topic Name", "Subfield", "Field", "Works Count"];
+  const rows = topics.map((t: any) => {
+    const idShort = colors.yellow + (t.id ? t.id.replace("https://openalex.org/", "") : "N/A") + colors.reset;
+    const name = colors.bold + (t.display_name?.length > 40 ? t.display_name.substring(0, 37) + "..." : (t.display_name || "N/A")) + colors.reset;
+    const subfield = t.subfield?.display_name || "N/A";
+    const field = t.field?.display_name || "N/A";
+    const count = (t.works_count ?? 0).toLocaleString();
+
+    return [idShort, name, subfield, field, count];
+  });
+
+  printTable(headers, rows);
+  console.log(`${colors.gray}提示: 使用 bun paper.ts search --topic <TopicID> 进行该主题精准文献检索${colors.reset}\n`);
+}
+
+// -------------------------------------------------------------
+// 4. Command handler: inst (active institution search)
+// -------------------------------------------------------------
+async function handleInst(parsed: any) {
+  const query = getOpt(parsed, "query", "q") || parsed.positional[0];
+  const limitRaw = parseInt(String(getOpt(parsed, "limit", "l") || "10"));
+  const limit = Math.min(isNaN(limitRaw) ? 10 : limitRaw, 50);
+
+  if (!query) {
+    console.error(`${colors.red}Error: Missing institution search keyword.${colors.reset}`);
+    console.log(`Example: bun paper.ts inst "Jingdezhen"`);
+    return;
+  }
+
+  console.log(`${colors.gray}Searching OpenAlex institution database for: "${query}"...${colors.reset}`);
+
+  const params: Record<string, string> = {
+    search: String(query),
+    per_page: String(limit)
+  };
+
+  const result = await fetchOpenAlex("/institutions", params);
+  const insts = result?.results || [];
+
+  if (insts.length === 0) {
+    console.log(`${colors.yellow}No institutions matching "${query}" were found.${colors.reset}`);
+    return;
+  }
+
+  printTitle(`OPENALEX INSTITUTION SEARCH (Found ${result?.meta?.count || insts.length} institutions)`);
+
+  const headers = ["Inst ID", "Institution Name", "Country", "Type", "Works Count"];
+  const rows = insts.map((i: any) => {
+    const idShort = colors.yellow + (i.id ? i.id.replace("https://openalex.org/", "") : "N/A") + colors.reset;
+    const name = colors.bold + (i.display_name?.length > 45 ? i.display_name.substring(0, 42) + "..." : (i.display_name || "N/A")) + colors.reset;
+    const country = i.country_code || "N/A";
+    const type = i.type || "N/A";
+    const count = (i.works_count ?? 0).toLocaleString();
+
+    return [idShort, name, country, type, count];
+  });
+
+  printTable(headers, rows);
+  console.log(`${colors.gray}提示: 使用 bun paper.ts search --inst <InstID> 或 --country <CountryCode> 进行机构产出检索${colors.reset}\n`);
+}
+
+// -------------------------------------------------------------
+// 5. Command handler: info (single or batch paper card)
 // -------------------------------------------------------------
 async function handleInfo(parsed: any) {
-  if (parsed.positional.length === 0) {
+  const rawTargets = parsed.positional.flatMap(arg => arg.split(/[|,]/)).map(s => s.trim()).filter(Boolean);
+
+  if (rawTargets.length === 0) {
     console.error(`${colors.red}Error: Missing DOI or OpenAlex ID argument.${colors.reset}`);
     console.log(`Example: bun paper.ts info 10.1111/jace.19034`);
+    console.log(`Example: bun paper.ts info 10.1111/jace.19034 10.1016/j.jeurceramsoc.2021.01.001 --save report.md`);
     return;
   }
 
-  const targetId = parsed.positional[0].trim();
-  console.log(`${colors.gray}Retrieving paper details for: ${targetId}...${colors.reset}`);
+  if (rawTargets.length === 1) {
+    const targetId = rawTargets[0];
+    console.log(`${colors.gray}Retrieving paper details for: ${targetId}...${colors.reset}`);
 
-  const work = await fetchSingleWork(targetId);
+    const work = await fetchSingleWork(targetId);
 
-  if (!work) {
-    console.error(`${colors.red}Error: Paper with ID/DOI "${targetId}" not found in database.${colors.reset}`);
+    if (!work) {
+      console.error(`${colors.red}Error: Paper with ID/DOI "${targetId}" not found in database.${colors.reset}`);
+      return;
+    }
+
+    printSingleWorkCard(work);
+    saveReportIfRequested(parsed, [work]);
     return;
   }
 
-  // Format authors listing
+  // Batch lookup for multiple DOIs / OpenAlex IDs
+  console.log(`${colors.gray}Retrieving batch paper details for ${rawTargets.length} items...${colors.reset}`);
+
+  const works: any[] = [];
+  const dois: string[] = [];
+  const wIds: string[] = [];
+
+  for (const t of rawTargets) {
+    if (t.match(/^W\d+$/i)) {
+      wIds.push(t.toUpperCase());
+    } else {
+      dois.push(cleanDOI(t));
+    }
+  }
+
+  if (dois.length > 0) {
+    const doiFilters = dois.map(d => `https://doi.org/${d}`).join("|");
+    const res = await fetchOpenAlex("/works", { filter: `doi:${doiFilters}`, per_page: String(Math.min(dois.length, 100)) });
+    if (res?.results) works.push(...res.results);
+  }
+
+  if (wIds.length > 0) {
+    const wFilters = wIds.join("|");
+    const res = await fetchOpenAlex("/works", { filter: `openalex:${wFilters}`, per_page: String(Math.min(wIds.length, 100)) });
+    if (res?.results) works.push(...res.results);
+  }
+
+  if (works.length === 0) {
+    console.error(`${colors.red}Error: None of the requested papers were found in database.${colors.reset}`);
+    return;
+  }
+
+  printTitle(`BATCH ACADEMIC LITERATURE CARDS (Found ${works.length} of ${rawTargets.length} requested)`);
+  
+  const headers = ["ID / DOI", "Title", "Year", "Journal", "Cites", "OA"];
+  const rows = works.map((w: any) => {
+    const doiClean = w.doi ? cleanDOI(w.doi) : "";
+    const idDisplay = doiClean ? colors.yellow + doiClean + colors.reset : colors.yellow + w.id.replace("https://openalex.org/", "") + colors.reset;
+    const title = colors.bold + (w.title?.length > 45 ? w.title.substring(0, 42) + "..." : (w.title || "Untitled")) + colors.reset;
+    const year = String(w.publication_year || "N/A");
+    const jName = w.primary_location?.source?.display_name || "N/A";
+    const jShort = jName.length > 20 ? jName.substring(0, 17) + "..." : jName;
+    const cites = String(w.cited_by_count ?? 0);
+    const oa = w.is_oa ? `${colors.green}OA${colors.reset}` : `${colors.gray}No${colors.reset}`;
+    return [idDisplay, title, year, jShort, cites, oa];
+  });
+
+  printTable(headers, rows);
+
+  works.forEach(w => printSingleWorkCard(w));
+  saveReportIfRequested(parsed, works);
+}
+
+// Print single work card layout
+function printSingleWorkCard(work: any) {
   const authors = (work.authorships || []).map((a: any) => {
     const name = a.author?.display_name || "Unknown Author";
     const instName = a.institutions?.[0]?.display_name;
@@ -463,11 +802,23 @@ async function handleInfo(parsed: any) {
 
   const abstractText = reconstructAbstract(work.abstract_inverted_index);
 
-  // Print console layout
+  const topics: string[] = (work.topics || []).slice(0, 5).map((t: any) => {
+    const domain = t.domain?.display_name || "";
+    const field = t.field?.display_name || "";
+    const name = t.display_name || "";
+    return `${name} [${field} › ${domain}]`;
+  });
+
+  const allLocations: any[] = work.locations || [];
+  const pdfUrl = work.primary_location?.pdf_url
+    || allLocations.find((l: any) => l.pdf_url)?.pdf_url
+    || null;
+
   console.log(`\n${colors.bold}${colors.cyan}================================================================================`);
   console.log(`                        ACADEMIC LITERATURE CARD`);
   console.log(`================================================================================${colors.reset}`);
   console.log(`  Title           : ${colors.bold}${work.title}${colors.reset}`);
+  console.log(`  Type            : ${work.type || "N/A"}`);
   console.log(`  Authors         : ${authors || "N/A"}`);
   console.log(`  Source Journal  : ${work.primary_location?.source?.display_name || "N/A"}`);
   if (work.primary_location?.source?.issn) {
@@ -477,40 +828,75 @@ async function handleInfo(parsed: any) {
   console.log(`  Citations       : ${colors.bold}${work.cited_by_count ?? 0} citations${colors.reset}`);
   console.log(`  Open Access     : ${work.is_oa ? colors.green + "Yes (Free full text available)" + colors.reset : colors.gray + "No (Paywalled)" + colors.reset}`);
   console.log(`  Landing Page    : ${work.primary_location?.landing_page_url || work.doi || "N/A"}`);
-  if (work.primary_location?.pdf_url) {
-    console.log(`  Direct PDF Link : ${colors.underline}${colors.green}${work.primary_location.pdf_url}${colors.reset}`);
+  if (pdfUrl) {
+    console.log(`  Direct PDF Link : ${colors.underline}${colors.green}${pdfUrl}${colors.reset}`);
+  }
+  if (topics.length > 0) {
+    console.log(`\n${colors.bold}${colors.blue}------------------------------------ TOPICS ------------------------------------${colors.reset}`);
+    topics.forEach((t, i) => console.log(`  ${i + 1}. ${t}`));
   }
 
   console.log(`\n${colors.bold}${colors.magenta}----------------------------------- ABSTRACT -----------------------------------${colors.reset}`);
-  // Word wrap abstract for clean display
   console.log(wordWrap(abstractText, 80));
   console.log(`${colors.bold}${colors.cyan}================================================================================${colors.reset}\n`);
+}
 
-  // Handle Save to file
+// Save markdown report helper
+function saveReportIfRequested(parsed: any, works: any[]) {
   const savePath = getOpt(parsed, "save");
-  if (savePath) {
-    let filename = typeof savePath === "string" ? savePath : `${work.title.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.md`;
-    if (!filename.endsWith(".md")) filename += ".md";
-    
-    let report = `# Academic Literature Report: ${work.title}\n\n`;
+  if (!savePath) return;
+
+  let filename = typeof savePath === "string" ? savePath : (
+    works.length === 1 
+      ? `${(works[0].title || "paper").toLowerCase().replace(/[^a-z0-9]+/g, "_").substring(0, 30)}.md`
+      : `batch_paper_report_${Date.now()}.md`
+  );
+  if (!filename.endsWith(".md")) filename += ".md";
+
+  let report = `# Academic Literature Report (${works.length} ${works.length === 1 ? "Paper" : "Papers"})\n\n`;
+  report += `* Generated at: ${new Date().toISOString()}\n\n`;
+
+  works.forEach((work, idx) => {
+    const authors = (work.authorships || []).map((a: any) => {
+      const name = a.author?.display_name || "Unknown Author";
+      const instName = a.institutions?.[0]?.display_name;
+      const country = a.institutions?.[0]?.country_code;
+      return `${name}${instName ? ` (${instName}${country ? ", " + country : ""})` : ""}`;
+    }).join(", ");
+
+    const abstractText = reconstructAbstract(work.abstract_inverted_index);
+    const topics = (work.topics || []).slice(0, 5).map((t: any) => `${t.display_name} [${t.field?.display_name || ""} › ${t.domain?.display_name || ""}]`);
+    const allLocations: any[] = work.locations || [];
+    const pdfUrl = work.primary_location?.pdf_url || allLocations.find((l: any) => l.pdf_url)?.pdf_url || null;
+
+    if (works.length > 1) {
+      report += `## ${idx + 1}. ${work.title}\n\n`;
+    } else {
+      report += `## Paper Metadata: ${work.title}\n\n`;
+    }
     report += `* **Title**: ${work.title}\n`;
+    report += `* **OpenAlex ID**: ${work.id}\n`;
+    report += `* **DOI**: ${work.doi || "N/A"}\n`;
+    report += `* **Type**: ${work.type || "N/A"}\n`;
     report += `* **Authors**: ${authors}\n`;
     report += `* **Journal**: ${work.primary_location?.source?.display_name || "N/A"}\n`;
-    report += `* **Date**: ${work.publication_date}\n`;
+    report += `* **Publication Date**: ${work.publication_date}\n`;
     report += `* **Citations**: ${work.cited_by_count} citations\n`;
     report += `* **Open Access**: ${work.is_oa ? "Yes" : "No"}\n`;
-    report += `* **Landing URL**: ${work.primary_location?.landing_page_url || work.doi || "N/A"}\n`;
-    if (work.primary_location?.pdf_url) {
-      report += `* **PDF URL**: ${work.primary_location.pdf_url}\n`;
+    report += `* **Landing Page**: ${work.primary_location?.landing_page_url || work.doi || "N/A"}\n`;
+    if (pdfUrl) report += `* **PDF URL**: ${pdfUrl}\n`;
+    if (topics.length > 0) {
+      report += `\n### Topics\n\n`;
+      topics.forEach((t, i) => { report += `${i + 1}. ${t}\n`; });
     }
-    report += `\n## Abstract\n\n${abstractText}\n`;
+    report += `\n### Abstract\n\n${abstractText}\n\n---\n\n`;
+  });
 
-    try {
-      writeFileSync(filename, report, "utf8");
-      console.log(`${colors.green}${colors.bold}[Success] Literature report saved successfully to: ${filename}${colors.reset}\n`);
-    } catch (e: any) {
-      console.error(`${colors.red}Failed to save report file: ${e.message}${colors.reset}`);
-    }
+  try {
+    writeFileSync(filename, report, "utf8");
+    console.log(`${colors.green}${colors.bold}[Success] Literature report saved successfully to: ${filename}${colors.reset}\n`);
+  } catch (e: any) {
+    console.error(`${colors.red}Failed to save report file: ${e.message}${colors.reset}`);
   }
 }
 
@@ -535,7 +921,7 @@ function wordWrap(text: string, limit: number): string {
 }
 
 // -------------------------------------------------------------
-// 3. Command handler: download
+// 6. Command handler: download
 // -------------------------------------------------------------
 async function handleDownload(parsed: any) {
   if (parsed.positional.length === 0) {
@@ -554,7 +940,10 @@ async function handleDownload(parsed: any) {
     return;
   }
 
-  const pdfUrl = work.primary_location?.pdf_url;
+  const allLocs: any[] = work.locations || [];
+  const pdfUrl: string | null = work.primary_location?.pdf_url
+    || allLocs.find((l: any) => l.pdf_url)?.pdf_url
+    || null;
   
   if (!pdfUrl) {
     console.error(`${colors.red}Error: Direct PDF download URL is not available for this article.${colors.reset}`);
@@ -567,10 +956,8 @@ async function handleDownload(parsed: any) {
     return;
   }
 
-  // Determine output filename
   let outputFilename = getOpt(parsed, "output", "o");
   if (!outputFilename || typeof outputFilename !== "string") {
-    // create a sanitized slug from the title
     const slug = work.title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "_")
@@ -585,7 +972,7 @@ async function handleDownload(parsed: any) {
     const response = await fetch(pdfUrl, {
       method: "GET",
       headers: {
-        "User-Agent": politeEmail ? `mailto:${politeEmail}` : "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        "User-Agent": "Mozilla/5.0 (compatible; paper-ts/1.0)"
       }
     });
 
