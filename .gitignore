@@ -34,3 +34,8 @@ encrypted_materials.ts
 # 临时文件与草稿目录
 .scratch/
 **/.scratch/
+
+# 私有配方与工艺资产（不开源）
+recipe/
+**/recipe/
+

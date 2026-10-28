@@ -58,8 +58,6 @@ Each tool is self-contained. Please refer to the specific `README.md` inside eac
 | `EPOops/` | Direct gateway to the European Patent Office for cracking global patent barriers. |
 | `std/` | Global industrial manufacturing standard retriever. |
 | `CompositionSearchCLI/` | Standalone terminal search engine for historical kiln formulations and chemicalcompositions. |
-| `recipe/glaze/` | High-precision ceramic glaze formulation workbench (Forward UMF, Reverse synthesis, Diff, Materials). |
-| `recipe/body/` | Ceramic clay body formulation analysis & visualization (Ternary plastic/lean/flux balance, Oxide breakdown, HTML report). |
 
 ## Contributing & CLA (Contributor License Agreement)
 
