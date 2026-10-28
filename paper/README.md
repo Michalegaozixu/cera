@@ -220,13 +220,7 @@ bun paper.ts download 10.1111/jace.19034 -o laser_ceramics.pdf
 
 ### 七、查看帮助信息
 
-随时可以在终端输入以下命令查看命令帮助菜单：
-
-```bash
-bun paper.ts help
-bun paper.ts -h
-bun paper.ts --help
-```
+随时可以在终端或编辑器中查阅本 `README.md` 文件获取完整的命令与参数使用说明。
 
 ---
 

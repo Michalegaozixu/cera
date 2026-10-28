@@ -62,29 +62,297 @@ const ALL_CERAMIC_ISSNS = Object.values(CORE_JOURNALS)
   .flatMap(j => j.issns)
   .join("|");
 
-// Color codes for terminal layout
-const colors = {
-  reset: "\x1b[0m",
-  bold: "\x1b[1m",
-  underline: "\x1b[4m",
-  red: "\x1b[31m",
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  blue: "\x1b[34m",
-  magenta: "\x1b[35m",
-  cyan: "\x1b[36m",
-  white: "\x1b[37m",
-  gray: "\x1b[90m"
+// ─── ANSI 语义化配色调色板 (Terminal UI Spec) ─────────────────────
+const A = {
+  r:  "\x1b[0m",    // reset
+  b:  "\x1b[1m",    // bold
+  d:  "\x1b[2m",    // dim
+  u:  "\x1b[4m",    // underline
+  gr: "\x1b[90m",   // dark gray (卡片最外层边框、无数据占位符 —)
+  cy: "\x1b[96m",   // bright cyan (键名、检索关键词)
+  ye: "\x1b[93m",   // bright yellow (核心数值、DOI)
+  gn: "\x1b[92m",   // bright green (主表格边框、成功状态)
+  mg: "\x1b[95m",   // bright magenta
+  rd: "\x1b[91m",   // bright red (错误与警告)
+  wh: "\x1b[39m",   // 终端默认前景色 (深浅色终端自适应)
 };
+
+// ─── CJK / Unicode 视觉宽度计算 ──────────────────────────
+function stripAnsi(s: string): string {
+  return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function getStrWidth(str: string): number {
+  let len = 0;
+  const stripped = stripAnsi(str);
+  for (const ch of stripped) {
+    const cp = ch.codePointAt(0)!;
+    const wide =
+      (cp >= 0x1100 && cp <= 0x115F) || // Hangul Jamo
+      (cp >= 0x2E80 && cp <= 0x9FFF) || // CJK 部首、字符
+      (cp >= 0xAC00 && cp <= 0xD7AF) || // 韩文
+      (cp >= 0xF900 && cp <= 0xFAFF) || // CJK 兼容
+      (cp >= 0xFF01 && cp <= 0xFF60) || // 全角 ASCII
+      (cp >= 0xFFE0 && cp <= 0xFFE6);   // 全角符号
+    len += wide ? 2 : 1;
+  }
+  return len;
+}
+
+function padStr(str: string, length: number): string {
+  const len = getStrWidth(str);
+  const padding = length - len;
+  return padding > 0 ? str + " ".repeat(padding) : str;
+}
+
+// ─── 多行 ANSI 折行保护 ────────────────────────────────────
+function wrapTextWithAnsi(raw: string, maxW: number): string[] {
+  if (!raw) return ["—"];
+  if (getStrWidth(raw) <= maxW) return [raw];
+
+  interface Token {
+    type: "ansi" | "space" | "word";
+    text: string;
+    vw: number;
+  }
+
+  const tokens: Token[] = [];
+  const regex = /(\x1b\[[0-9;]*m)|(\s+)|([^\s\x1b]+)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(raw)) !== null) {
+    if (match[1]) {
+      tokens.push({ type: "ansi", text: match[1], vw: 0 });
+    } else if (match[2]) {
+      const text = match[2].includes("\n") ? match[2] : " ";
+      tokens.push({ type: "space", text, vw: text.length });
+    } else if (match[3]) {
+      tokens.push({ type: "word", text: match[3], vw: getStrWidth(match[3]) });
+    }
+  }
+
+  const lines: string[] = [];
+  let curLine = "";
+  let curW = 0;
+  let activeAnsi = "";
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+
+    if (tok.type === "ansi") {
+      if (tok.text === A.r) activeAnsi = "";
+      else activeAnsi += tok.text;
+      curLine += tok.text;
+      continue;
+    }
+
+    if (tok.type === "space") {
+      if (tok.text.includes("\n")) {
+        if (activeAnsi) curLine += A.r;
+        lines.push(curLine);
+        curLine = activeAnsi;
+        curW = 0;
+        continue;
+      }
+      if (curW > 0 && curW + tok.vw <= maxW) {
+        curLine += tok.text;
+        curW += tok.vw;
+      }
+      continue;
+    }
+
+    if (tok.type === "word") {
+      if (tok.vw > maxW) {
+        if (curW > 0) {
+          if (activeAnsi) curLine += A.r;
+          lines.push(curLine);
+          curLine = activeAnsi;
+          curW = 0;
+        }
+        for (const ch of tok.text) {
+          const cw = getStrWidth(ch);
+          if (curW + cw > maxW) {
+            if (activeAnsi) curLine += A.r;
+            lines.push(curLine);
+            curLine = activeAnsi + ch;
+            curW = cw;
+          } else {
+            curLine += ch;
+            curW += cw;
+          }
+        }
+      } else {
+        if (curW + tok.vw > maxW) {
+          if (curLine.endsWith(" ")) curLine = curLine.slice(0, -1);
+          if (activeAnsi) curLine += A.r;
+          lines.push(curLine);
+          curLine = activeAnsi + tok.text;
+          curW = tok.vw;
+        } else {
+          curLine += tok.text;
+          curW += tok.vw;
+        }
+      }
+    }
+  }
+
+  if (curW > 0 || curLine) {
+    if (curLine.endsWith(" ")) curLine = curLine.slice(0, -1);
+    if (activeAnsi && !curLine.endsWith(A.r)) curLine += A.r;
+    lines.push(curLine);
+  }
+
+  return lines.length > 0 ? lines : ["—"];
+}
+
+// ─── 横向圆角表格生成器（带内嵌圆角边框与智能列宽分配）─────
+function getHorizontalTableLinesWrapped(
+  headers: string[],
+  rows: string[][],
+  maxTableWidth: number = 76,
+  valueColor: string = A.wh,
+  borderColor: string = A.gn
+): string[] {
+  const numCols = headers.length;
+
+  const idealWidths = headers.map((h, colIdx) => {
+    let maxW = getStrWidth(h);
+    for (const row of rows) {
+      if (row[colIdx]) {
+        maxW = Math.max(maxW, getStrWidth(row[colIdx]));
+      }
+    }
+    return Math.max(maxW, 4);
+  });
+
+  const minWidths = headers.map((h, colIdx) => {
+    let minW = getStrWidth(h);
+    for (const row of rows) {
+      if (row[colIdx]) {
+        const words = stripAnsi(row[colIdx]).split(/\s+/);
+        for (const w of words) {
+          minW = Math.max(minW, getStrWidth(w));
+        }
+      }
+    }
+    return Math.min(minW, 30);
+  });
+
+  const totalIdeal = idealWidths.reduce((a, b) => a + b, 0) + (numCols - 1) * 3 + 4;
+  let colWidths: number[] = [];
+
+  if (totalIdeal <= maxTableWidth) {
+    colWidths = idealWidths;
+  } else {
+    const separatorsW = (numCols - 1) * 3 + 4;
+    const availW = Math.max(numCols * 6, maxTableWidth - separatorsW);
+
+    colWidths = new Array(numCols).fill(0);
+    let remainingAvailW = availW;
+    const flexCols: number[] = [];
+
+    for (let i = 0; i < numCols; i++) {
+      if (idealWidths[i] <= 18) {
+        colWidths[i] = idealWidths[i];
+        remainingAvailW -= idealWidths[i];
+      } else {
+        flexCols.push(i);
+      }
+    }
+
+    if (flexCols.length > 0 && remainingAvailW > flexCols.length * 6) {
+      const sumFlexIdeal = flexCols.reduce((sum, idx) => sum + idealWidths[idx], 0);
+      for (const idx of flexCols) {
+        const prop = Math.floor((idealWidths[idx] / sumFlexIdeal) * remainingAvailW);
+        colWidths[idx] = Math.max(minWidths[idx], prop);
+      }
+    } else {
+      const sumIdeal = idealWidths.reduce((a, b) => a + b, 0);
+      colWidths = idealWidths.map((w, idx) => {
+        const prop = Math.floor((w / sumIdeal) * availW);
+        return Math.max(minWidths[idx], prop);
+      });
+    }
+  }
+
+  const top = `${borderColor}╭─` + colWidths.map(w => "─".repeat(w)).join("─┬─") + `─╮${A.r}`;
+  const mid = `${borderColor}├─` + colWidths.map(w => "─".repeat(w)).join("─┼─") + `─┤${A.r}`;
+  const bot = `${borderColor}╰─` + colWidths.map(w => "─".repeat(w)).join("─┴─") + `─╯${A.r}`;
+
+  const hLine = `${borderColor}│${A.r} ` + headers.map((h, i) => `${borderColor}${padStr(h, colWidths[i])}${A.r}`).join(` ${borderColor}│${A.r} `) + ` ${borderColor}│${A.r}`;
+
+  const result = [top, hLine, mid];
+
+  rows.forEach((row, rIdx) => {
+    if (rIdx > 0) result.push(mid);
+
+    const cellLines: string[][] = headers.map((_, colIdx) => {
+      return wrapTextWithAnsi(row[colIdx] || "—", colWidths[colIdx]);
+    });
+
+    const maxRowLines = Math.max(...cellLines.map(lines => lines.length), 1);
+
+    for (let lineIdx = 0; lineIdx < maxRowLines; lineIdx++) {
+      const lineCells = headers.map((_, colIdx) => {
+        const cellText = cellLines[colIdx][lineIdx] || "";
+        return `${valueColor}${padStr(cellText, colWidths[colIdx])}${A.r}`;
+      });
+      result.push(`${borderColor}│${A.r} ` + lineCells.join(` ${borderColor}│${A.r} `) + ` ${borderColor}│${A.r}`);
+    }
+  });
+
+  result.push(bot);
+  return result;
+}
+
+// ─── 最外层灰色圆角卡片渲染器 ──────────────────────────────
+function printCardWithTables(titleRaw: string, tableBlocks: string[][]) {
+  const allContentLines = tableBlocks.flat();
+  const maxLineWidth = Math.max(...allContentLines.map(line => getStrWidth(line)), getStrWidth(titleRaw));
+
+  const termWidth = process.stdout.columns || 80;
+  const maxInnerWidth = Math.max(76, maxLineWidth);
+
+  const boxTotalWidth = maxInnerWidth + 4;
+  const outerMargin = Math.max(0, Math.floor((termWidth - boxTotalWidth) / 2));
+  const omStr = " ".repeat(outerMargin);
+
+  const printInnerLine = (line: string, rawWidth: number) => {
+    const padding = Math.max(0, maxInnerWidth - rawWidth);
+    const lPad = Math.floor(padding / 2);
+    const rPad = padding - lPad;
+    console.log(`${omStr}${A.gr}│${A.r} ${" ".repeat(lPad)}${line}${" ".repeat(rPad)} ${A.gr}│${A.r}`);
+  };
+
+  const tLen = getStrWidth(titleRaw);
+  const dashCount = Math.max(2, maxInnerWidth + 2 - tLen);
+  const lDash = Math.floor(dashCount / 2);
+  const rDash = dashCount - lDash;
+
+  console.log();
+  console.log(`${omStr}${A.gr}╭${"─".repeat(lDash)}${A.gn}${titleRaw}${A.gr}${"─".repeat(rDash)}╮${A.r}`);
+  console.log(`${omStr}${A.gr}│${A.r} ${" ".repeat(maxInnerWidth)} ${A.gr}│${A.r}`);
+
+  tableBlocks.forEach((block, bIdx) => {
+    if (bIdx > 0) {
+      console.log(`${omStr}${A.gr}│${A.r} ${" ".repeat(maxInnerWidth)} ${A.gr}│${A.r}`);
+    }
+    block.forEach(line => printInnerLine(line, getStrWidth(line)));
+  });
+
+  console.log(`${omStr}${A.gr}│${A.r} ${" ".repeat(maxInnerWidth)} ${A.gr}│${A.r}`);
+  console.log(`${omStr}${A.gr}╰${"─".repeat(maxInnerWidth + 2)}╯${A.r}`);
+  console.log();
+}
 
 // Main process
 async function main() {
   const args = process.argv.slice(2);
   const command = args[0]?.toLowerCase();
 
-  if (!command || ["help", "-h", "--help"].includes(command)) {
-    printHelp();
-    return;
+  if (!command) {
+    console.error(`${A.rd}Error: Missing command.${A.r}`);
+    process.exit(1);
   }
 
   const validCommands = [
@@ -93,8 +361,7 @@ async function main() {
   ];
 
   if (!validCommands.includes(command)) {
-    console.error(`${colors.red}Error: Unknown command "${command}".${colors.reset}`);
-    printHelp();
+    console.error(`${A.rd}Error: Unknown command "${command}".${A.r}`);
     process.exit(1);
   }
 
@@ -126,57 +393,8 @@ async function main() {
         break;
     }
   } catch (error: any) {
-    console.error(`${colors.red}Error: ${error.message || error}${colors.reset}`);
+    console.error(`${A.rd}Error: ${error.message || error}${A.r}`);
   }
-}
-
-// Print help documentation
-function printHelp() {
-  console.log(`
-${colors.bold}${colors.cyan}OpenAlex Academic Paper Search Tool (paper.ts)${colors.reset}
-${colors.gray}Tailored for Ceramic & Materials Science Research${colors.reset}
-
-${colors.bold}USAGE:${colors.reset}
-  bun paper.ts <command> [options]
-
-${colors.bold}COMMANDS:${colors.reset}
-  ${colors.bold}search${colors.reset}       Search literature database with filters (keyword, journal, year, cites, topic, etc.)
-  ${colors.bold}group${colors.reset}        Aggregation statistics & distribution trends (year, country, type, journal, topic, etc.)
-  ${colors.bold}topics${colors.reset}       Search OpenAlex Topic classification system by keyword
-  ${colors.bold}inst${colors.reset}         Search OpenAlex Institution database by keyword
-  ${colors.bold}info${colors.reset}         Get detailed card info for single or batch DOIs / OpenAlex IDs
-  ${colors.bold}download${colors.reset}     Download Open Access (OA) PDF full-text to local disk
-
-${colors.bold}SEARCH & GROUP OPTIONS:${colors.reset}
-  -q, --query <text>       Search query string
-  -j, --journal <key>      Filter by ceramic core journal key (jacs, jecs, ci, jac, jncs, solgel, acta)
-  --ceramics               Filter by all core ceramic journals
-  -y, --year <year|range>  Filter publication year (e.g. 2024 or 2020-2026)
-  --oa                     Filter Open Access works only
-  -t, --type <type>        Filter work type (article, review, book-chapter, preprint, etc.)
-  --lang <code\>            Filter language (e.g. en, zh, ja)
-  -c, --country <code\>     Filter author institution country code (e.g. CN, US, DE)
-  --inst <ID\>              Filter author institution OpenAlex ID (e.g. I105991555)
-  --topic <ID\>             Filter topic OpenAlex ID (e.g. T10132)
-  --cites <ID|DOI>         Search works citing a given paper (e.g. W2741809807 or 10.1111/jace.19034)
-  --doi <DOIs>             Filter single or pipe/comma separated DOIs
-  --cited-min <n>          Filter minimum citation count
-  -l, --limit <n>          Page limit (default 10, max 100)
-  -p, --page <n>           Page number (default 1)
-  -s, --sort <citations|year> Sort order (default citations)
-  --by <field>             [group only] Grouping field: year (default), type, oa, country, journal, topic, lang
-
-${colors.bold}EXAMPLES:${colors.reset}
-  bun paper.ts search -q "alumina sintering" --ceramics --lang en
-  bun paper.ts search --cites W2741809807 -s year
-  bun paper.ts search --topic T10132 -c CN -y 2022-2026
-  bun paper.ts group -q "sintering" --by year
-  bun paper.ts group -q "porcelain" --by country
-  bun paper.ts topics "sintering alumina"
-  bun paper.ts inst "Jingdezhen"
-  bun paper.ts info 10.1111/jace.19034 10.1016/j.jeurceramsoc.2021.01.001 --save batch_report.md
-  bun paper.ts download W4319030111 -o laser_ceramics.pdf
-`);
 }
 
 // Basic argument parser
@@ -209,41 +427,6 @@ function getOpt(parsed: any, longName: string, shortName?: string): any {
   if (parsed.options[longName] !== undefined) return parsed.options[longName];
   if (shortName && parsed.options[shortName] !== undefined) return parsed.options[shortName];
   return undefined;
-}
-
-// Print title wrapper
-function printTitle(title: string) {
-  console.log(`\n${colors.bold}${colors.cyan}=== ${title} ===${colors.reset}`);
-}
-
-// Strip ANSI codes for text width calculation
-function stripAnsi(str: string): string {
-  return str.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
-// Pad string based on visible length (ignores ANSI codes)
-function padString(str: string, width: number): string {
-  const visibleLength = stripAnsi(str).length;
-  const paddingLength = Math.max(0, width - visibleLength);
-  return str + " ".repeat(paddingLength);
-}
-
-// Draw formatted table in console
-function printTable(headers: string[], rows: string[][]) {
-  if (rows.length === 0) return;
-  const widths = headers.map((h, i) => {
-    return Math.max(h.length, ...rows.map(r => stripAnsi(r[i] || "").length));
-  });
-
-  const headerLine = headers.map((h, i) => padString(h, widths[i])).join(" | ");
-  console.log(`${colors.bold}${colors.gray}${headerLine}${colors.reset}`);
-  console.log(widths.map(w => "-".repeat(w)).join("-|-"));
-
-  for (const row of rows) {
-    const line = row.map((val, i) => padString(val, widths[i])).join(" | ");
-    console.log(line);
-  }
-  console.log();
 }
 
 // Clean DOI strings to isolate raw numbers
@@ -358,7 +541,7 @@ async function buildCommonFilters(parsed: any): Promise<string[]> {
     if (journalInfo) {
       filters.push(`primary_location.source.issn:${journalInfo.issns.join("|")}`);
     } else {
-      console.warn(`${colors.yellow}Warning: Unknown journal key "${journalKey}".${colors.reset}`);
+      console.warn(`${A.ye}Warning: Unknown journal key "${journalKey}".${A.r}`);
     }
   } else if (ceramicsOnly) {
     filters.push(`primary_location.source.issn:${ALL_CERAMIC_ISSNS}`);
@@ -463,7 +646,7 @@ async function handleSearch(parsed: any) {
   const filters = await buildCommonFilters(parsed);
 
   if (!query && filters.length === 0) {
-    console.error(`${colors.red}Error: Missing search criteria. Specify query (-q) or at least one filter (--cites, --topic, --inst, --country, --doi, -j, --ceramics).${colors.reset}`);
+    console.error(`${A.rd}Error: Missing search criteria. Specify query (-q) or at least one filter (--cites, --topic, --inst, --country, --doi, -j, --ceramics).${A.r}`);
     console.log(`Example: bun paper.ts search -q "alumina sintering" --ceramics`);
     console.log(`Example: bun paper.ts search --cites W2741809807 --lang en`);
     return;
@@ -488,50 +671,49 @@ async function handleSearch(parsed: any) {
     params.sort = "cited_by_count:desc,publication_year:desc";
   }
 
-  console.log(`${colors.gray}Searching OpenAlex database...${colors.reset}`);
+  console.log(`${A.gr}Searching OpenAlex database...${A.r}`);
   if (openAlexApiKey) {
-    console.log(`${colors.gray}API Key enabled${colors.reset}`);
+    console.log(`${A.gr}API Key enabled${A.r}`);
   }
 
   const result = await fetchOpenAlex("/works", params);
   const works = result?.results || [];
 
   if (works.length === 0) {
-    console.log(`${colors.yellow}No academic papers matching the query were found.${colors.reset}`);
+    console.log(`${A.ye}No academic papers matching the query were found.${A.r}`);
     return;
   }
 
   const ceramicsOnly = getOpt(parsed, "ceramics");
-  const targetTitle = ceramicsOnly 
-    ? "LITERATURE SEARCH (Core Ceramic Journals)" 
-    : "LITERATURE SEARCH (Global Catalog)";
+  const targetScope = ceramicsOnly ? "Core Ceramic Journals" : "Global Catalog";
   const totalCount = result?.meta?.count ?? works.length;
-  printTitle(`${targetTitle} - Page ${page} / Total ~${totalCount.toLocaleString()}, Page items ${works.length}`);
+  const cardTitle = ` LITERATURE SEARCH (${targetScope}) - Page ${page} / Total ~${totalCount.toLocaleString()} `;
 
   const headers = ["ID / DOI", "Title", "Year", "Journal", "Cites", "Type", "OA"];
   const rows = works.map((w: any) => {
     const doiClean = w.doi ? cleanDOI(w.doi) : "";
     const idDisplay = doiClean 
-      ? colors.yellow + doiClean + colors.reset 
-      : colors.yellow + w.id.replace("https://openalex.org/", "") + colors.reset;
+      ? `${A.ye}${doiClean}${A.r}` 
+      : `${A.ye}${w.id.replace("https://openalex.org/", "")}${A.r}`;
 
-    const title = colors.bold + (w.title?.length > 50 ? w.title.substring(0, 47) + "..." : (w.title || "Untitled")) + colors.reset;
-    const year = String(w.publication_year || "N/A");
-    
-    const sourceName = w.primary_location?.source?.display_name || "N/A";
-    const jName = sourceName.length > 22 ? sourceName.substring(0, 19) + "..." : sourceName;
-    
-    const cites = String(w.cited_by_count ?? 0);
-    const workType = (w.type || "N/A").toLowerCase();
-    const oa = w.is_oa ? `${colors.green}OA${colors.reset}` : `${colors.gray}No${colors.reset}`;
+    const title = `${A.b}${w.title || "Untitled"}${A.r}`;
+    const year = String(w.publication_year || "—");
+    const sourceName = w.primary_location?.source?.display_name || "—";
+    const cites = `${A.ye}${w.cited_by_count ?? 0}${A.r}`;
+    const workType = (w.type || "—").toLowerCase();
+    const oa = w.is_oa ? `${A.gn}OA${A.r}` : `${A.gr}No${A.r}`;
 
-    return [idDisplay, title, year, jName, cites, workType, oa];
+    return [idDisplay, title, year, sourceName, cites, workType, oa];
   });
 
-  printTable(headers, rows);
+  const termWidth = process.stdout.columns || 80;
+  const maxTableWidth = Math.max(72, Math.min(110, termWidth - 10));
+
+  const tableLines = getHorizontalTableLinesWrapped(headers, rows, maxTableWidth, A.wh, A.gn);
+  printCardWithTables(cardTitle, [tableLines]);
 
   if (totalCount > page * limit) {
-    console.log(`${colors.gray}提示: 使用 -p ${page + 1} 查看下一页${colors.reset}\n`);
+    console.log(`${A.gr}提示: 使用 -p ${page + 1} 查看下一页${A.r}\n`);
   }
 }
 
@@ -561,7 +743,7 @@ async function handleGroup(parsed: any) {
   const filters = await buildCommonFilters(parsed);
 
   if (!query && filters.length === 0) {
-    console.error(`${colors.red}Error: Please specify query (-q) or at least one filter for aggregation analysis.${colors.reset}`);
+    console.error(`${A.rd}Error: Please specify query (-q) or at least one filter for aggregation analysis.${A.r}`);
     console.log(`Example: bun paper.ts group -q "sintering alumina" --by publication_year`);
     console.log(`Example: bun paper.ts group -q "zirconia" --by country`);
     return;
@@ -574,45 +756,46 @@ async function handleGroup(parsed: any) {
   if (query) params.search = String(query);
   if (filters.length > 0) params.filter = filters.join(",");
 
-  console.log(`${colors.gray}Computing OpenAlex aggregated statistics for group_by=${groupByField}...${colors.reset}`);
+  console.log(`${A.gr}Computing OpenAlex aggregated statistics for group_by=${groupByField}...${A.r}`);
   
   const result = await fetchOpenAlex("/works", params);
   const groups: Array<{ key: string; key_display_name?: string; count: number }> = result?.group_by || [];
 
   if (groups.length === 0) {
-    console.log(`${colors.yellow}No statistical records found for group_by=${groupByField}.${colors.reset}`);
+    console.log(`${A.ye}No statistical records found for group_by=${groupByField}.${A.r}`);
     return;
   }
 
   const totalCount = groups.reduce((acc, g) => acc + g.count, 0);
-
-  printTitle(`GROUP-BY AGGREGATION ANALYSIS: ${groupByField} (Total indexed: ${totalCount.toLocaleString()})`);
+  const cardTitle = ` GROUP-BY AGGREGATION ANALYSIS: ${groupByField} (Total indexed: ${totalCount.toLocaleString()}) `;
 
   const maxCount = Math.max(...groups.map(g => g.count));
   const headers = ["Category / Key", "Count", "Share", "Distribution Visual"];
-
   const displayGroups = groups.slice(0, 20);
 
   const rows = displayGroups.map(g => {
     let keyName = g.key_display_name || g.key || "Unknown";
     keyName = keyName.replace(/^https:\/\/openalex\.org\/(countries|topics)\//, "");
-    if (keyName.length > 35) keyName = keyName.substring(0, 32) + "...";
     
-    const countStr = g.count.toLocaleString();
+    const countStr = `${A.ye}${g.count.toLocaleString()}${A.r}`;
     const percent = totalCount > 0 ? (g.count / totalCount) * 100 : 0;
     const shareStr = `${percent.toFixed(1)}%`;
     
     const barRatio = maxCount > 0 ? g.count / maxCount : 0;
     const barWidth = Math.round(barRatio * 25);
-    const visualBar = colors.cyan + "█".repeat(barWidth) + colors.reset;
+    const visualBar = `${A.cy}${"█".repeat(barWidth)}${A.r}`;
 
-    return [keyName, countStr, shareStr, visualBar];
+    return [`${A.cy}${keyName}${A.r}`, countStr, shareStr, visualBar];
   });
 
-  printTable(headers, rows);
+  const termWidth = process.stdout.columns || 80;
+  const maxTableWidth = Math.max(72, Math.min(100, termWidth - 10));
+
+  const tableLines = getHorizontalTableLinesWrapped(headers, rows, maxTableWidth, A.wh, A.gn);
+  printCardWithTables(cardTitle, [tableLines]);
 
   if (groups.length > 20) {
-    console.log(`${colors.gray}Showing top 20 of ${groups.length} groups.${colors.reset}\n`);
+    console.log(`${A.gr}Showing top 20 of ${groups.length} groups.${A.r}\n`);
   }
 }
 
@@ -625,12 +808,12 @@ async function handleTopics(parsed: any) {
   const limit = Math.min(isNaN(limitRaw) ? 10 : limitRaw, 50);
 
   if (!query) {
-    console.error(`${colors.red}Error: Missing topic search keyword.${colors.reset}`);
+    console.error(`${A.rd}Error: Missing topic search keyword.${A.r}`);
     console.log(`Example: bun paper.ts topics "sintering"`);
     return;
   }
 
-  console.log(`${colors.gray}Searching OpenAlex topic system for: "${query}"...${colors.reset}`);
+  console.log(`${A.gr}Searching OpenAlex topic system for: "${query}"...${A.r}`);
 
   const params: Record<string, string> = {
     search: String(query),
@@ -641,25 +824,30 @@ async function handleTopics(parsed: any) {
   const topics = result?.results || [];
 
   if (topics.length === 0) {
-    console.log(`${colors.yellow}No topics matching "${query}" were found.${colors.reset}`);
+    console.log(`${A.ye}No topics matching "${query}" were found.${A.r}`);
     return;
   }
 
-  printTitle(`OPENALEX TOPIC CLASSIFICATION SYSTEM (Found ${result?.meta?.count || topics.length} topics)`);
+  const totalCount = result?.meta?.count || topics.length;
+  const cardTitle = ` OPENALEX TOPIC CLASSIFICATION SYSTEM (Found ${totalCount} topics) `;
 
   const headers = ["Topic ID", "Topic Name", "Subfield", "Field", "Works Count"];
   const rows = topics.map((t: any) => {
-    const idShort = colors.yellow + (t.id ? t.id.replace("https://openalex.org/", "") : "N/A") + colors.reset;
-    const name = colors.bold + (t.display_name?.length > 40 ? t.display_name.substring(0, 37) + "..." : (t.display_name || "N/A")) + colors.reset;
-    const subfield = t.subfield?.display_name || "N/A";
-    const field = t.field?.display_name || "N/A";
-    const count = (t.works_count ?? 0).toLocaleString();
+    const idShort = `${A.ye}${t.id ? t.id.replace("https://openalex.org/", "") : "—"}${A.r}`;
+    const name = `${A.b}${t.display_name || "—"}${A.r}`;
+    const subfield = t.subfield?.display_name || "—";
+    const field = t.field?.display_name || "—";
+    const count = `${A.ye}${(t.works_count ?? 0).toLocaleString()}${A.r}`;
 
     return [idShort, name, subfield, field, count];
   });
 
-  printTable(headers, rows);
-  console.log(`${colors.gray}提示: 使用 bun paper.ts search --topic <TopicID> 进行该主题精准文献检索${colors.reset}\n`);
+  const termWidth = process.stdout.columns || 80;
+  const maxTableWidth = Math.max(72, Math.min(110, termWidth - 10));
+
+  const tableLines = getHorizontalTableLinesWrapped(headers, rows, maxTableWidth, A.wh, A.gn);
+  printCardWithTables(cardTitle, [tableLines]);
+  console.log(`${A.gr}提示: 使用 bun paper.ts search --topic <TopicID> 进行该主题精准文献检索${A.r}\n`);
 }
 
 // -------------------------------------------------------------
@@ -671,12 +859,12 @@ async function handleInst(parsed: any) {
   const limit = Math.min(isNaN(limitRaw) ? 10 : limitRaw, 50);
 
   if (!query) {
-    console.error(`${colors.red}Error: Missing institution search keyword.${colors.reset}`);
+    console.error(`${A.rd}Error: Missing institution search keyword.${A.r}`);
     console.log(`Example: bun paper.ts inst "Jingdezhen"`);
     return;
   }
 
-  console.log(`${colors.gray}Searching OpenAlex institution database for: "${query}"...${colors.reset}`);
+  console.log(`${A.gr}Searching OpenAlex institution database for: "${query}"...${A.r}`);
 
   const params: Record<string, string> = {
     search: String(query),
@@ -687,25 +875,30 @@ async function handleInst(parsed: any) {
   const insts = result?.results || [];
 
   if (insts.length === 0) {
-    console.log(`${colors.yellow}No institutions matching "${query}" were found.${colors.reset}`);
+    console.log(`${A.ye}No institutions matching "${query}" were found.${A.r}`);
     return;
   }
 
-  printTitle(`OPENALEX INSTITUTION SEARCH (Found ${result?.meta?.count || insts.length} institutions)`);
+  const totalCount = result?.meta?.count || insts.length;
+  const cardTitle = ` OPENALEX INSTITUTION SEARCH (Found ${totalCount} institutions) `;
 
   const headers = ["Inst ID", "Institution Name", "Country", "Type", "Works Count"];
   const rows = insts.map((i: any) => {
-    const idShort = colors.yellow + (i.id ? i.id.replace("https://openalex.org/", "") : "N/A") + colors.reset;
-    const name = colors.bold + (i.display_name?.length > 45 ? i.display_name.substring(0, 42) + "..." : (i.display_name || "N/A")) + colors.reset;
-    const country = i.country_code || "N/A";
-    const type = i.type || "N/A";
-    const count = (i.works_count ?? 0).toLocaleString();
+    const idShort = `${A.ye}${i.id ? i.id.replace("https://openalex.org/", "") : "—"}${A.r}`;
+    const name = `${A.b}${i.display_name || "—"}${A.r}`;
+    const country = i.country_code || "—";
+    const type = i.type || "—";
+    const count = `${A.ye}${(i.works_count ?? 0).toLocaleString()}${A.r}`;
 
     return [idShort, name, country, type, count];
   });
 
-  printTable(headers, rows);
-  console.log(`${colors.gray}提示: 使用 bun paper.ts search --inst <InstID> 或 --country <CountryCode> 进行机构产出检索${colors.reset}\n`);
+  const termWidth = process.stdout.columns || 80;
+  const maxTableWidth = Math.max(72, Math.min(110, termWidth - 10));
+
+  const tableLines = getHorizontalTableLinesWrapped(headers, rows, maxTableWidth, A.wh, A.gn);
+  printCardWithTables(cardTitle, [tableLines]);
+  console.log(`${A.gr}提示: 使用 bun paper.ts search --inst <InstID> 或 --country <CountryCode> 进行机构产出检索${A.r}\n`);
 }
 
 // -------------------------------------------------------------
@@ -715,7 +908,7 @@ async function handleInfo(parsed: any) {
   const rawTargets = parsed.positional.flatMap(arg => arg.split(/[|,]/)).map(s => s.trim()).filter(Boolean);
 
   if (rawTargets.length === 0) {
-    console.error(`${colors.red}Error: Missing DOI or OpenAlex ID argument.${colors.reset}`);
+    console.error(`${A.rd}Error: Missing DOI or OpenAlex ID argument.${A.r}`);
     console.log(`Example: bun paper.ts info 10.1111/jace.19034`);
     console.log(`Example: bun paper.ts info 10.1111/jace.19034 10.1016/j.jeurceramsoc.2021.01.001 --save report.md`);
     return;
@@ -723,12 +916,12 @@ async function handleInfo(parsed: any) {
 
   if (rawTargets.length === 1) {
     const targetId = rawTargets[0];
-    console.log(`${colors.gray}Retrieving paper details for: ${targetId}...${colors.reset}`);
+    console.log(`${A.gr}Retrieving paper details for: ${targetId}...${A.r}`);
 
     const work = await fetchSingleWork(targetId);
 
     if (!work) {
-      console.error(`${colors.red}Error: Paper with ID/DOI "${targetId}" not found in database.${colors.reset}`);
+      console.error(`${A.rd}Error: Paper with ID/DOI "${targetId}" not found in database.${A.r}`);
       return;
     }
 
@@ -738,7 +931,7 @@ async function handleInfo(parsed: any) {
   }
 
   // Batch lookup for multiple DOIs / OpenAlex IDs
-  console.log(`${colors.gray}Retrieving batch paper details for ${rawTargets.length} items...${colors.reset}`);
+  console.log(`${A.gr}Retrieving batch paper details for ${rawTargets.length} items...${A.r}`);
 
   const works: any[] = [];
   const dois: string[] = [];
@@ -765,26 +958,29 @@ async function handleInfo(parsed: any) {
   }
 
   if (works.length === 0) {
-    console.error(`${colors.red}Error: None of the requested papers were found in database.${colors.reset}`);
+    console.error(`${A.rd}Error: None of the requested papers were found in database.${A.r}`);
     return;
   }
 
-  printTitle(`BATCH ACADEMIC LITERATURE CARDS (Found ${works.length} of ${rawTargets.length} requested)`);
+  const cardTitle = ` BATCH ACADEMIC LITERATURE CARDS (Found ${works.length} of ${rawTargets.length} requested) `;
   
   const headers = ["ID / DOI", "Title", "Year", "Journal", "Cites", "OA"];
   const rows = works.map((w: any) => {
     const doiClean = w.doi ? cleanDOI(w.doi) : "";
-    const idDisplay = doiClean ? colors.yellow + doiClean + colors.reset : colors.yellow + w.id.replace("https://openalex.org/", "") + colors.reset;
-    const title = colors.bold + (w.title?.length > 45 ? w.title.substring(0, 42) + "..." : (w.title || "Untitled")) + colors.reset;
-    const year = String(w.publication_year || "N/A");
-    const jName = w.primary_location?.source?.display_name || "N/A";
-    const jShort = jName.length > 20 ? jName.substring(0, 17) + "..." : jName;
-    const cites = String(w.cited_by_count ?? 0);
-    const oa = w.is_oa ? `${colors.green}OA${colors.reset}` : `${colors.gray}No${colors.reset}`;
-    return [idDisplay, title, year, jShort, cites, oa];
+    const idDisplay = doiClean ? `${A.ye}${doiClean}${A.r}` : `${A.ye}${w.id.replace("https://openalex.org/", "")}${A.r}`;
+    const title = `${A.b}${w.title || "Untitled"}${A.r}`;
+    const year = String(w.publication_year || "—");
+    const jName = w.primary_location?.source?.display_name || "—";
+    const cites = `${A.ye}${w.cited_by_count ?? 0}${A.r}`;
+    const oa = w.is_oa ? `${A.gn}OA${A.r}` : `${A.gr}No${A.r}`;
+    return [idDisplay, title, year, jName, cites, oa];
   });
 
-  printTable(headers, rows);
+  const termWidth = process.stdout.columns || 80;
+  const maxTableWidth = Math.max(72, Math.min(110, termWidth - 10));
+
+  const tableLines = getHorizontalTableLinesWrapped(headers, rows, maxTableWidth, A.wh, A.gn);
+  printCardWithTables(cardTitle, [tableLines]);
 
   works.forEach(w => printSingleWorkCard(w));
   saveReportIfRequested(parsed, works);
@@ -806,7 +1002,7 @@ function printSingleWorkCard(work: any) {
     const domain = t.domain?.display_name || "";
     const field = t.field?.display_name || "";
     const name = t.display_name || "";
-    return `${name} [${field} › ${domain}]`;
+    return `${name} [${field}${domain ? " › " + domain : ""}]`;
   });
 
   const allLocations: any[] = work.locations || [];
@@ -814,31 +1010,47 @@ function printSingleWorkCard(work: any) {
     || allLocations.find((l: any) => l.pdf_url)?.pdf_url
     || null;
 
-  console.log(`\n${colors.bold}${colors.cyan}================================================================================`);
-  console.log(`                        ACADEMIC LITERATURE CARD`);
-  console.log(`================================================================================${colors.reset}`);
-  console.log(`  Title           : ${colors.bold}${work.title}${colors.reset}`);
-  console.log(`  Type            : ${work.type || "N/A"}`);
-  console.log(`  Authors         : ${authors || "N/A"}`);
-  console.log(`  Source Journal  : ${work.primary_location?.source?.display_name || "N/A"}`);
-  if (work.primary_location?.source?.issn) {
-    console.log(`  ISSN            : ${work.primary_location.source.issn.join(", ")}`);
-  }
-  console.log(`  Pub Date        : ${work.publication_date || "N/A"} (Year: ${work.publication_year || "N/A"})`);
-  console.log(`  Citations       : ${colors.bold}${work.cited_by_count ?? 0} citations${colors.reset}`);
-  console.log(`  Open Access     : ${work.is_oa ? colors.green + "Yes (Free full text available)" + colors.reset : colors.gray + "No (Paywalled)" + colors.reset}`);
-  console.log(`  Landing Page    : ${work.primary_location?.landing_page_url || work.doi || "N/A"}`);
+  const termWidth = process.stdout.columns || 80;
+  const maxTableWidth = Math.max(72, Math.min(100, termWidth - 10));
+
+  // Table 1: Core Metadata
+  const metaHeaders = ["Property", "Details"];
+  const metaRows: string[][] = [
+    ["Title", `${A.b}${work.title || "Untitled"}${A.r}`],
+    ["Type", work.type || "—"],
+    ["Authors", authors || "—"],
+    ["Source Journal", (work.primary_location?.source?.display_name || "—") + (work.primary_location?.source?.issn ? ` (ISSN: ${work.primary_location.source.issn.join(", ")})` : "")],
+    ["Pub Date", `${work.publication_date || "—"} (Year: ${work.publication_year || "—"})`],
+    ["Citations", `${A.ye}${work.cited_by_count ?? 0}${A.r} citations`],
+    ["Open Access", work.is_oa ? `${A.gn}Yes (Free full text available)${A.r}` : `${A.gr}No (Paywalled)${A.r}`],
+    ["Landing Page", work.primary_location?.landing_page_url || work.doi || "—"],
+  ];
   if (pdfUrl) {
-    console.log(`  Direct PDF Link : ${colors.underline}${colors.green}${pdfUrl}${colors.reset}`);
-  }
-  if (topics.length > 0) {
-    console.log(`\n${colors.bold}${colors.blue}------------------------------------ TOPICS ------------------------------------${colors.reset}`);
-    topics.forEach((t, i) => console.log(`  ${i + 1}. ${t}`));
+    metaRows.push(["PDF Link", `${A.u}${A.cy}${pdfUrl}${A.r}`]);
   }
 
-  console.log(`\n${colors.bold}${colors.magenta}----------------------------------- ABSTRACT -----------------------------------${colors.reset}`);
-  console.log(wordWrap(abstractText, 80));
-  console.log(`${colors.bold}${colors.cyan}================================================================================${colors.reset}\n`);
+  const metaTable = getHorizontalTableLinesWrapped(metaHeaders, metaRows, maxTableWidth, A.wh, A.gn);
+
+  const tableBlocks: string[][] = [metaTable];
+
+  // Table 2: Topics (if available)
+  if (topics.length > 0) {
+    const topicHeaders = ["#", "Topic & Domain Classification"];
+    const topicRows = topics.map((t, i) => [`${i + 1}`, t]);
+    const topicTable = getHorizontalTableLinesWrapped(topicHeaders, topicRows, maxTableWidth, A.wh, A.gn);
+    tableBlocks.push(topicTable);
+  }
+
+  // Table 3: Abstract (if available)
+  if (abstractText) {
+    const abstractHeaders = ["Abstract"];
+    const abstractTable = getHorizontalTableLinesWrapped(abstractHeaders, [[abstractText]], maxTableWidth, A.wh, A.gn);
+    tableBlocks.push(abstractTable);
+  }
+
+  const workIdShort = work.id ? work.id.replace("https://openalex.org/", "") : "CARD";
+  const cardTitle = ` ACADEMIC LITERATURE CARD (${workIdShort}) `;
+  printCardWithTables(cardTitle, tableBlocks);
 }
 
 // Save markdown report helper
@@ -894,30 +1106,10 @@ function saveReportIfRequested(parsed: any, works: any[]) {
 
   try {
     writeFileSync(filename, report, "utf8");
-    console.log(`${colors.green}${colors.bold}[Success] Literature report saved successfully to: ${filename}${colors.reset}\n`);
+    console.log(`${A.gn}${A.b}[Success] Literature report saved successfully to: ${filename}${A.r}\n`);
   } catch (e: any) {
-    console.error(`${colors.red}Failed to save report file: ${e.message}${colors.reset}`);
+    console.error(`${A.rd}Failed to save report file: ${e.message}${A.r}`);
   }
-}
-
-// Simple word wrap helper for console formatting
-function wordWrap(text: string, limit: number): string {
-  const words = text.split(" ");
-  let currentLine = "";
-  const lines: string[] = [];
-
-  for (const word of words) {
-    if ((currentLine + word).length > limit) {
-      lines.push(currentLine.trim());
-      currentLine = word + " ";
-    } else {
-      currentLine += word + " ";
-    }
-  }
-  if (currentLine) {
-    lines.push(currentLine.trim());
-  }
-  return lines.join("\n");
 }
 
 // -------------------------------------------------------------
@@ -925,18 +1117,18 @@ function wordWrap(text: string, limit: number): string {
 // -------------------------------------------------------------
 async function handleDownload(parsed: any) {
   if (parsed.positional.length === 0) {
-    console.error(`${colors.red}Error: Missing DOI or OpenAlex ID argument.${colors.reset}`);
+    console.error(`${A.rd}Error: Missing DOI or OpenAlex ID argument.${A.r}`);
     console.log(`Example: bun paper.ts download 10.1111/jace.19034`);
     return;
   }
 
   const targetId = parsed.positional[0].trim();
-  console.log(`${colors.gray}Retrieving full-text access links for: ${targetId}...${colors.reset}`);
+  console.log(`${A.gr}Retrieving full-text access links for: ${targetId}...${A.r}`);
 
   const work = await fetchSingleWork(targetId);
 
   if (!work) {
-    console.error(`${colors.red}Error: Paper with ID/DOI "${targetId}" not found in database.${colors.reset}`);
+    console.error(`${A.rd}Error: Paper with ID/DOI "${targetId}" not found in database.${A.r}`);
     return;
   }
 
@@ -946,7 +1138,7 @@ async function handleDownload(parsed: any) {
     || null;
   
   if (!pdfUrl) {
-    console.error(`${colors.red}Error: Direct PDF download URL is not available for this article.${colors.reset}`);
+    console.error(`${A.rd}Error: Direct PDF download URL is not available for this article.${A.r}`);
     console.log(`Landing page: ${work.primary_location?.landing_page_url || work.doi || "N/A"}`);
     if (!work.is_oa) {
       console.log(`This paper is paywalled. You may need to access it via institutional library login.`);
@@ -965,8 +1157,8 @@ async function handleDownload(parsed: any) {
     outputFilename = `${slug}_${work.id.replace("https://openalex.org/", "")}.pdf`;
   }
 
-  console.log(`${colors.cyan}Found PDF download link: ${pdfUrl}${colors.reset}`);
-  console.log(`${colors.gray}Downloading PDF to ${outputFilename}...${colors.reset}`);
+  console.log(`${A.cy}Found PDF download link: ${pdfUrl}${A.r}`);
+  console.log(`${A.gr}Downloading PDF to ${outputFilename}...${A.r}`);
 
   try {
     const response = await fetch(pdfUrl, {
@@ -984,9 +1176,9 @@ async function handleDownload(parsed: any) {
     const buffer = Buffer.from(arrayBuffer);
     writeFileSync(outputFilename, buffer);
 
-    console.log(`${colors.green}${colors.bold}[Success] PDF downloaded successfully! Saved as: ${outputFilename}${colors.reset}\n`);
+    console.log(`${A.gn}${A.b}[Success] PDF downloaded successfully! Saved as: ${outputFilename}${A.r}\n`);
   } catch (error: any) {
-    console.error(`${colors.red}Failed to download PDF: ${error.message}${colors.reset}`);
+    console.error(`${A.rd}Failed to download PDF: ${error.message}${A.r}`);
     console.log(`You can still download it manually from the URL: ${pdfUrl}`);
   }
 }
